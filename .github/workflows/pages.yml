@@ -1,0 +1,76 @@
+# Builds the app with Trunk and publishes dist/ to GitHub Pages.
+ 
+name: Deploy to GitHub Pages
+ 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+ 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+ 
+# One deployment at a time; a newer push waits instead of cancelling a running deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+ 
+env:
+  TRUNK_VERSION: v0.21.14
+  CARGO_TERM_COLOR: always
+ 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+ 
+      - name: Check that the map tiles are committed
+        run: |
+          if [ ! -f tiles/tiles.json ]; then
+            echo "::error::tiles/tiles.json is missing. Run fetch_tiles.py locally and commit the tiles/ folder."
+            exit 1
+          fi
+ 
+      - name: Install Rust with the WebAssembly target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+ 
+      - uses: Swatinem/rust-cache@v2
+ 
+      - name: Run the tests
+        run: cargo test --locked
+ 
+      - name: Install Trunk
+        run: |
+          mkdir -p "$HOME/.trunk-bin"
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.trunk-bin" trunk
+          echo "$HOME/.trunk-bin" >> "$GITHUB_PATH"
+ 
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v6
+ 
+      # The site lives under /<repository>/ (or / for a <user>.github.io repository),
+      # so the app's script and style paths must start there.
+      - name: Build
+        run: trunk build --release --public-url "${{ steps.pages.outputs.base_path }}/"
+ 
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+ 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

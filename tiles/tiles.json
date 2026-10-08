@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "bounds": [
+    [
+      49.217878,
+      16.655974
+    ],
+    [
+      49.255318,
+      16.712684
+    ]
+  ],
+  "min_zoom": 12,
+  "max_zoom": 18,
+  "tile_size": 256,
+  "retina": false,
+  "mapsets": {
+    "outdoor": {
+      "ext": "png",
+      "tiles": 2443
+    }
+  },
+  "default_mapset": "outdoor",
+  "attribution_html": "<a href=\"https://api.mapy.com/copyright\" target=\"_blank\" rel=\"noopener\">&copy; Seznam.cz a.s. a další</a>",
+  "logo": "mapy-logo.svg",
+  "logo_link": "https://mapy.com/",
+  "fetched_at": "2026-10-08T20:51:11+02:00"
+}

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Průběh závodu</title>
+
+  <!-- Copied into dist/ by Trunk. Everything is served locally: no CDN, no map API. -->
+  <link data-trunk rel="copy-dir" href="static/leaflet" />
+  <link data-trunk rel="copy-dir" href="static/fonts" />
+  <link data-trunk rel="copy-dir" href="data" />
+  <link data-trunk rel="copy-dir" href="tiles" />
+  <link data-trunk rel="css" href="fonts.css" />
+  <link data-trunk rel="css" href="style.css" />
+
+  <!-- Leaflet must load before the app, which uses the global `L`. -->
+  <link rel="stylesheet" href="leaflet/leaflet.css" />
+  <script src="leaflet/leaflet.js"></script>
+
+  <link data-trunk rel="rust" data-wasm-opt="z" />
+</head>
+<body></body>
+</html>
