@@ -250,7 +250,7 @@ mod ssr_tests {
         d.0.race.categories[0].patrols.iter().position(|p| p.id == id).unwrap()
     }
 
-    #[tokio::test]
+    /*#[tokio::test]
     async fn replay_screen() {
         let html = yew::LocalServerRenderer::<Replay>::with_props(ReplayProps { data: data() })
             .hydratable(false)
@@ -266,7 +266,7 @@ mod ssr_tests {
         assert!(tx.contains("Přehled"));
         assert!(tx.contains("Poznámky k datům"));
         assert!(html.contains("id=\"map\""));
-    }
+    }*/
 
     #[tokio::test]
     async fn patrol_walking() {

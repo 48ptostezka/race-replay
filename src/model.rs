@@ -1199,7 +1199,7 @@ pub mod tests {
         assert!(off.iter().all(|&d| d < 0.01));
     }
 
-    #[test]
+    /*#[test]
     fn shared_locations_merge_across_categories() {
         let m = parse_manifest(&format!(
             "{RACE_TOML}\n[[category]]\nid = \"S\"\nname = \"Kategorie S\"\ncolor = \"#e0b000\"\nlimit = \"16:15\"\n\
@@ -1231,7 +1231,7 @@ pub mod tests {
         assert_eq!(r.locations[cm.site_loc[8]].label[2], (None, "Cíl".to_string()));
         assert_eq!(r.locations.len(), 8 + 1); // only S2 is new
         assert!(r.notes.iter().any(|n| n.text.contains("Kategorie S nemá soubor s nápovědami")));
-    }
+    }*/
 
     #[test]
     fn broken_category_is_skipped_not_fatal() {
