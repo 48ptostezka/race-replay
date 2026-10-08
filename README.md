@@ -1,6 +1,7 @@
 # Race Replay
  
-> [!IMPORTANT] Kód aplikace je celý vibe-coded, napsal ho Claude. Specifikace aplikace a návrh simulačního algoritmu jsou dílem člověka s pomocí Clauda. Zobrazená data jsou skutečná a anonymizovaná a zachycují průběh soutěže ZaPsem 2026, kterou pořádalo Sdružení pionýrských tábornických oddílů z Brna.
+> [!WARNING] 
+> Kód aplikace je celý vibe-coded, napsal ho Claude. Specifikace aplikace a návrh simulačního algoritmu jsou dílem člověka s pomocí Clauda. Zobrazená data jsou skutečná a anonymizovaná a zachycují průběh soutěže ZaPsem 2026, kterou pořádalo Sdružení pionýrských tábornických oddílů z Brna.
  
 Statická webová aplikace (Rust, Yew, WebAssembly, Leaflet), která na mapě přehrává šifrovací závod. Hlídky všech kategorií se po minutách posouvají po trase podle časů příchodů, záznamů o nápovědách a dohodnutého rozdělení času na pobyt na stanovišti a chůzi.
  
