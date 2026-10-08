@@ -13,11 +13,8 @@ Všechna zobrazovaná data jsou ve složce `data/`:
 - `*_casy.csv`: časy příchodů. Číslo hlídky a pak sloupec pro každé stanoviště v pořadí trasy (`09:45`), prázdná buňka znamená chybějící čas.
 - `*_napovedy.csv`: nápovědy na stanovištích (`bez nápovědy`, `nápověda`, `totálka`, prázdné = neznámo). Sloupec startu se ignoruje. Nepovinné.
 - `trasa_*.gpx`: trasa exportovaná z mapy.cz (jedna stopa).
-- `*_stanoviste.csv`: `stanoviste,lat,lon` v desetinných stupních. Nepovinný sloupec `misto` pojmenuje místo společné více kategoriím. Řádky začínající `#` se přeskakují.
-Stanoviště různých kategorií, která jsou od sebe blíž než `merge_radius_m` (15 m) nebo mají stejné `misto`, se sloučí do jednoho místa. Totéž platí pro MZ a Cíl na stejných souřadnicích.
- 
-Soubor `m_stanoviste.csv` je zatím jen provizorní. M0 je začátek trasy a MZ/Cíl její konec, ale M1–M6 jsou zdvojené body z GPX, ne skutečná stanoviště. Je potřeba doplnit skutečné souřadnice a přidat kategorie S a R (v `race.toml` jsou zakomentované).
- 
+- `*_stanoviste.csv`: `stanoviste,lat,lon` v desetinných stupních. Stanoviště různých kategorií, která jsou od sebe blíž než `merge_radius_m` (15 m) nebo mají stejné `misto`, se sloučí do jednoho místa. Totéž platí pro MZ a Cíl na stejných souřadnicích.
+
 ## Mapové dlaždice
  
 Klíč k API Mapy.com patří do `.env` (`MAPY_API_KEY=...`). Pak s trasami všech kategorií:
