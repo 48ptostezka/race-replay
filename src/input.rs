@@ -41,6 +41,9 @@ pub struct CategoryManifest {
     pub color: String,
     #[serde(default)]
     pub limit: Option<String>,
+    /// Assumed walking speed of this category, km/h; the race-wide `speed_kmh` if missing.
+    #[serde(default)]
+    pub speed_kmh: Option<f64>,
     pub times: String,
     #[serde(default)]
     pub hints: Option<String>,
@@ -319,6 +322,7 @@ mod tests {
         assert_eq!(m.speed_kmh, 5.0);
         assert_eq!(m.merge_radius_m, 15.0);
         assert_eq!(m.categories[0].hints, None);
+        assert_eq!(m.categories[0].speed_kmh, None);
         assert!(parse_manifest("title = \"x\"").is_err());
     }
 

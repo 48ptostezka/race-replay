@@ -3,11 +3,11 @@
 use yew::prelude::*;
 
 use crate::app::DataRef;
-use crate::fmt::{dec, duration, hm, plural};
+use crate::fmt::{dec, duration, hm, num, plural};
 use crate::input::Hint;
 use crate::map::COURSE;
 use crate::model::{Level, LocKind, Outcome, Race};
-use crate::sim::{counts, occupants, state_at, Kind};
+use crate::sim::{counts, final_standing, occupants, standing, state_at, taken_by, Kind};
 use crate::state::{Action, Sel, Ui};
 
 #[derive(Properties, PartialEq)]
@@ -30,6 +30,7 @@ pub fn panel(p: &PanelProps) -> Html {
             patrol_panel(race, cat, patrol, t, &p.dispatch)
         }
         Some(Sel::Location(l)) if l < race.locations.len() => location_panel(race, l, t, &p.visible, &p.dispatch),
+        Some(Sel::Info) => info_panel(&p.dispatch),
         _ => summary(race, t, &p.visible),
     }
 }
@@ -94,11 +95,23 @@ fn patrol_panel(race: &Race, ci: usize, pi: usize, t: f64, d: &UseReducerDispatc
         Kind::Finished => ("V cíli".to_string(), "pill done"),
         Kind::Disqualified => ("Diskvalifikována".to_string(), "pill dq"),
     };
-    let mut totals = format!("Nápovědy {} · Totálky {}", p.hints, p.solutions);
-    if p.unknown > 0 {
-        totals
-            .push_str(&format!(" · {}", plural(p.unknown as usize, "záznam chybí", "záznamy chybí", "záznamů chybí")));
-    }
+    // Hints, solutions and position now and at the end of the race.
+    let (hints_now, solutions_now) = taken_by(race, ci, pi, t);
+    let stats = html! {
+        <>
+        <table class="stats">
+            <thead><tr><th></th><th>{ "Teď" }</th><th>{ "Na konci" }</th></tr></thead>
+            <tbody>
+                <tr><th>{ "Nápovědy" }</th><td>{ hints_now }</td><td>{ p.hints }</td></tr>
+                <tr><th>{ "Totálky" }</th><td>{ solutions_now }</td><td>{ p.solutions }</td></tr>
+                <tr><th>{ "Pořadí" }</th><td>{ standing(race, ci, pi, t).label() }</td><td>{ final_standing(race, ci, pi).label() }</td></tr>
+            </tbody>
+        </table>
+        if p.unknown > 0 {
+            <p class="muted small">{ format!("U {} chybí záznam o nápovědě.", plural(p.unknown as usize, "stanoviště", "stanovišť", "stanovišť")) }</p>
+        }
+        </>
+    };
 
     let body = match st.kind {
         Kind::Finished => {
@@ -144,7 +157,7 @@ fn patrol_panel(race: &Race, ci: usize, pi: usize, t: f64, d: &UseReducerDispatc
                     Some(format!("nejdřív v {}", hm(iv.arrive + race.settings.hint_after)))
                 }
                 Hint::Solution if iv.used == Hint::Solution => {
-                    Some(format!("nejdřív v {}", hm(iv.arrive + race.settings.solution_after)))
+                    Some(format!("v {}, pak odchod", hm(iv.arrive + race.settings.solution_after)))
                 }
                 _ => None,
             };
@@ -167,7 +180,7 @@ fn patrol_panel(race: &Race, ci: usize, pi: usize, t: f64, d: &UseReducerDispatc
                         { row("Úsek", "stejné místo, bez přesunu".into(), None) }
                     } else {
                         { row("Rychlost", iv.speed_kmh.map(|v| format!("cca {} km/h", dec(v, 1))).unwrap_or_else(|| "–".into()),
-                              Some(format!("předpoklad {} km/h", dec(race.settings.speed_kmh, 0)))) }
+                                Some(format!("předpoklad {} km/h", num(c.speed_kmh)))) }
                         { row("Úsek", format!("{} km · chůze {}", dec(km, 2), duration(iv.walk)), None) }
                     }
                     { for walking.map(|f| html! {
@@ -244,7 +257,7 @@ fn patrol_panel(race: &Race, ci: usize, pi: usize, t: f64, d: &UseReducerDispatc
                 </div>
             </div>
             <div class={pill}>{ status }</div>
-            <div class="totals">{ totals }</div>
+            { stats }
             { body }
             { section("Průběh závodu".into(), strip) }
             { notes_list(race, |n| n.cat == Some(ci) && n.patrol == Some(pi)) }
@@ -266,58 +279,79 @@ fn location_panel(race: &Race, li: usize, t: f64, visible: &[bool], d: &UseReduc
         format!("Právě zde {} · {}", plural(occ.len(), "hlídka", "hlídky", "hlídek"), hm(t))
     };
     html! {
-        <div class="lp">
-            <div class="ph"><span class="eyebrow">{ eyebrow }</span>{ close(d) }</div>
-            <h2 class="loc-title">
-                { for loc.label.iter().enumerate().map(|(i, (c, name))| html! { <>
-                    if i > 0 { <span class="sep">{ " · " }</span> }
-                    <span style={format!("color:{}", c.map_or(COURSE, |c| race.categories[c].color.as_str()))}>{ name }</span>
-                </> }) }
-            </h2>
-            <p class="muted">{ sub }</p>
-            if !occ.is_empty() {
-                <div class="occ">
-                    <div class="occ-h"><span>{ "Hlídka" }</span><span>{ "Od" }</span><span>{ "Na místě" }</span><span>{ "Záznam" }</span></div>
-                    { for occ.iter().map(|o| {
-                        let c = &race.categories[o.cat];
-                        let p = &c.patrols[o.patrol];
-                        let sel = Sel::Patrol { cat: o.cat, patrol: o.patrol };
-                        let dd = d.clone();
-                        let (from, there, record) = match o.state.kind {
-                            Kind::AtSite { k, since } => {
-                                let mins = (t - since).floor().max(0.0);
-                                let rec = if k == 0 { "start".to_string() } else { p.records[k].label().to_string() };
-                                (hm(since), html! {
-                                    <span class="mins">
-                                        <b>{ format!("{mins} min") }</b>
-                                        <span class="mbar" style={format!("--m:{}%", (mins / 60.0 * 100.0).min(100.0))}><i></i></span>
-                                    </span>
-                                }, rec)
+    <div class="lp">
+        <div class="ph"><span class="eyebrow">{ eyebrow }</span>{ close(d) }</div>
+        <h2 class="loc-title">
+            { for loc.label.iter().enumerate().map(|(i, (c, name))| html! { <>
+                if i > 0 { <span class="sep">{ " · " }</span> }
+                <span style={format!("color:{}", c.map_or(COURSE, |c| race.categories[c].color.as_str()))}>{ name }</span>
+            </> }) }
+        </h2>
+        <p class="muted">{ sub }</p>
+        if !occ.is_empty() {
+            <div class="occ">
+                <div class="occ-h"><span>{ "Hlídka" }</span><span>{ "Od" }</span><span>{ "Na místě" }</span><span>{ "Záznam" }</span></div>
+                { for occ.iter().map(|o| {
+                    let c = &race.categories[o.cat];
+                    let p = &c.patrols[o.patrol];
+                    let sel = Sel::Patrol { cat: o.cat, patrol: o.patrol };
+                    let dd = d.clone();
+                    let (from, there, record) = match o.state.kind {
+                        Kind::AtSite { k, since } => {
+                            let mins = (t - since).floor().max(0.0);
+                            let rec = if k == 0 { "start".to_string() } else { p.records[k].label().to_string() };
+                            (hm(since), html! {
+                                <span class="mins">
+                                    <b>{ format!("{mins} min") }</b>
+                                    <span class="mbar" style={format!("--m:{}%", (mins / 60.0 * 100.0).min(100.0))}><i></i></span>
+                                </span>
+                            }, rec)
+                        }
+                        Kind::Waiting => (hm(p.arrivals[0]), html! { <span class="muted">{ "čeká na start" }</span> }, "start".to_string()),
+                        Kind::Finished => {
+                            let place = match &p.outcome {
+                                Outcome::Finished { place: Some(pl), .. } => pl.label(),
+                                _ => String::new(),
+                            };
+                            (hm(o.state.since), html! { <span class="muted">{ "v cíli" }</span> }, place)
                             }
-                            Kind::Waiting => (hm(p.arrivals[0]), html! { <span class="muted">{ "čeká na start" }</span> }, "start".to_string()),
-                            Kind::Finished => {
-                                let place = match &p.outcome {
-                                    Outcome::Finished { place: Some(pl), .. } => pl.label(),
-                                    _ => String::new(),
-                                };
-                                (hm(o.state.since), html! { <span class="muted">{ "v cíli" }</span> }, place)
-                            }
-                            Kind::Disqualified => (hm(o.state.since), html! { <span class="muted">{ "–" }</span> }, "diskvalifikována".to_string()),
+                            Kind::Disqualified => (hm(o.state.since), html! { <span class="muted">{ "–" }</span> }, "diskv.".to_string()),
                             Kind::Walking { .. } => (String::new(), html! {}, String::new()),
                         };
-                        html! {
-                            <button class="occ-r" onclick={Callback::from(move |_: MouseEvent| dd.dispatch(Action::Select(Some(sel))))}
-                                    title="Otevřít hlídku">
-                                <span class="who-c"><i class="dot" style={format!("background:{}", c.color)}></i>{ format!("{} {}", c.id, p.id) }</span>
-                                <span>{ from }</span>
-                                { there }
-                                <span class={classes!("rec", (record == "neznámo").then_some("unk"))}>{ record }</span>
-                            </button>
+                    html! {
+                        <button class="occ-r" onclick={Callback::from(move |_: MouseEvent| dd.dispatch(Action::Select(Some(sel))))}
+                                title="Otevřít hlídku">
+                            <span class="who-c"><i class="dot" style={format!("background:{}", c.color)}></i>{ format!("{} {}", c.id, p.id) }</span>
+                            <span>{ from }</span>
+                            { there }
+                            <span class={classes!("rec", (record == "neznámo").then_some("unk"))}>{ record }</span>
+                        </button>
+                    }
+                }) }
+            </div>
+            <p class="foot">{ "Pruh: minuty na místě, značky u 20 a 40 min (nápověda, totálka)." }</p>
                         }
-                    }) }
-                </div>
-                <p class="foot">{ "Pruh: minuty na místě, značky u 20 a 40 min (nápověda, totálka)." }</p>
-            }
+                    </div>
+                }
+}
+
+fn info_panel(d: &UseReducerDispatcher<Ui>) -> Html {
+    html! {
+        <div class="ip">
+            <div class="ph"><span class="eyebrow">{ "Jak to funguje?" }</span>{ close(d) }</div>
+            <h2 class="info-title">{ "Jak aplikace odhaduje polohu hlídek" }</h2>
+            <p>{ "Polohy hlídek na mapě nejsou úplně skutečné. Během závodu je nikdo nesledoval. Známe jen čas, kdy hlídka dorazila na každé stanoviště, a záznam o tom, zda tam dostala nápovědu nebo totálku. Všechno mezi těmito okamžiky je odhad podle jednoduchého modelu, a nemusí proto odpovídat tomu, co se doopravdy stalo." }</p>
+            <h3>{ "Jak model funguje" }</h3>
+            <ul>
+                <li>{ "Čas mezi příchody na dvě po sobě jdoucí stanoviště se rozdělí na pobyt na stanovišti a přesun na další." }</li>
+                <li>{ "Doba přesunu se odhadne z délky trasy a předpokládané rychlosti chůze." }</li>
+                <li>{ "Pobyt omezují záznamy o nápovědách: bez nápovědy hlídka zůstala na stanovišti méně než 20 minut, s nápovědou 20 až 40 minut, s totálkou právě 40 minut. Na startu se nápovědy nedávají, takže tam může být pobyt libovolně dlouhý." }</li>
+                <li>{ "Když se odhad s časy nesrovná, model upraví rychlost chůze. Hlídka se pak na mapě pohybuje rychleji nebo pomaleji, než se předpokládá." }</li>
+                <li>{ "Na cestě se tečka posouvá po trase rovnoměrně. Zastávky, bloudění ani zkratky model nezná." }</li>
+                <li>{ "Nápověda a totálka se započítají ve 20. a 40. minutě pobytu, tedy v nejdřívějším možném okamžiku." }</li>
+                <li>{ "Chybějící časy se doplní odhadem a tečka má pak čárkovaný okraj. Záznam o nápovědě, který s časy nejde dohromady, se pro výpočet nepoužije. Vše doplněné a podezřelé najdete v Poznámkách k datům." }</li>
+                <li>{ "Průběžné pořadí se určuje jen podle vzdálenosti, kterou hlídce zbývá ujít do cíle, a je proto jen orientační." }</li>
+            </ul>
         </div>
     }
 }

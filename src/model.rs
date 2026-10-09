@@ -52,13 +52,24 @@ impl Settings {
         }
     }
 
-    /// Allowed stay at a site, minutes, for a hint record.
+    /// Allowed stay at a site, minutes, for a hint record (min, max).
     pub fn stay_bounds(&self, h: Hint) -> (f64, f64) {
         match h {
             Hint::None => (0.0, self.hint_after),
             Hint::Hint => (self.hint_after, self.solution_after),
-            Hint::Solution => (self.solution_after, f64::INFINITY),
+            // a totálka is the cipher's solution: the patrol leaves right after it
+            Hint::Solution => (self.solution_after, self.solution_after),
             Hint::Unknown => (0.0, f64::INFINITY),
+        }
+    }
+
+    /// The allowed stay in words, for data notes.
+    pub fn stay_text(&self, h: Hint) -> String {
+        match h {
+            Hint::None => format!("pobyt nejvýš {} min", self.hint_after.round()),
+            Hint::Hint => format!("pobyt {}–{} min", self.hint_after.round(), self.solution_after.round()),
+            Hint::Solution => format!("pobyt právě {} min", self.solution_after.round()),
+            Hint::Unknown => "pobyt libovolně dlouhý".to_string(),
         }
     }
 }
@@ -168,6 +179,8 @@ pub struct Category {
     pub name: String,
     pub color: String,
     pub limit: Option<f64>,
+    /// Assumed walking speed of this category, km/h.
+    pub speed_kmh: f64,
     pub sites: Vec<String>,
     pub site_pos: Vec<LatLon>,
     /// Optional explicit shared-location name per site (`misto` column).
@@ -332,6 +345,21 @@ fn build_category(ci: usize, input: CategoryInput, s: &Settings, notes: &mut Not
         },
     };
 
+    let speed_kmh = match m.speed_kmh {
+        None => s.speed_kmh,
+        Some(v) if v > 0.0 => v,
+        Some(v) => {
+            notes.add(
+                Level::Warn,
+                Some(ci),
+                None,
+                format!("Kategorie {cid}: rychlost {v} km/h není kladná, použije se {} km/h.", dec(s.speed_kmh, 1)),
+            );
+            s.speed_kmh
+        }
+    };
+    let s = &Settings { speed_kmh, ..s.clone() };
+
     // Times.
     struct Raw {
         id: String,
@@ -450,7 +478,6 @@ fn build_category(ci: usize, input: CategoryInput, s: &Settings, notes: &mut Not
 
     // Patrols.
     let mut patrols = Vec::with_capacity(raws.len());
-    let mut late_exact = Vec::new();
     for (pi, r) in raws.iter().enumerate() {
         let pid = &r.id;
         let mut t = r.t.clone();
@@ -541,9 +568,6 @@ fn build_category(ci: usize, input: CategoryInput, s: &Settings, notes: &mut Not
         }
         let outcome = if last == n - 1 {
             let at = arrivals[last];
-            if r.t[last].is_some_and(|v| limit.is_some_and(|l| (v - l).abs() < 1e-9)) {
-                late_exact.push(pid.clone());
-            }
             if limit.is_some_and(|l| at >= l - 1e-9) {
                 Outcome::Late { at }
             } else {
@@ -574,23 +598,6 @@ fn build_category(ci: usize, input: CategoryInput, s: &Settings, notes: &mut Not
             outcome,
         });
     }
-    if !late_exact.is_empty() {
-        let level = if late_exact.len() >= 2 { Level::Warn } else { Level::Info };
-        let who = if late_exact.len() == 1 {
-            format!("hlídka {} má", late_exact[0])
-        } else {
-            format!("hlídky {} mají", late_exact.join(", "))
-        };
-        notes.add(
-            level,
-            Some(ci),
-            None,
-            format!(
-                "Kategorie {cid}: {who} v cíli přesně čas limitu {}; čas byl nejspíš zapsán při uzavření cíle.",
-                hm(limit.unwrap_or(0.0))
-            ),
-        );
-    }
     assign_places(ci, &cid, &mut patrols, notes);
 
     Some(Category {
@@ -598,6 +605,7 @@ fn build_category(ci: usize, input: CategoryInput, s: &Settings, notes: &mut Not
         name: m.name.clone(),
         color: m.color.clone(),
         limit,
+        speed_kmh,
         sites,
         site_pos,
         site_misto,
@@ -792,41 +800,23 @@ pub fn split_patrol(
         let mut speed_note = false;
         if !estimated && gap > 0.0 && len >= 0.001 {
             let tag = format!("přesun {} → {}", sites[k], sites[k + 1]);
+            let why = if k == 0 {
+                "start, bez nápověd".to_string()
+            } else {
+                format!("{}, {}", used.label(), s.stay_text(used))
+            };
             match speed_kmh {
                 Some(v) if v > MAX_SPEED_KMH => {
                     speed_note = true;
-                    note(
-                        Level::Warn,
-                        format!(
-                            "{tag} vychází na {} km/h ({}, pobyt nejméně {} min).",
-                            dec(v, 1),
-                            used.label(),
-                            lo.round()
-                        ),
-                    );
+                    note(Level::Warn, format!("{tag} vychází na {} km/h ({why}).", dec(v, 1)));
                 }
                 None => {
                     speed_note = true;
-                    note(
-                        Level::Warn,
-                        format!(
-                            "{tag}: na chůzi nezbývá žádný čas ({}, pobyt nejméně {} min).",
-                            used.label(),
-                            lo.round()
-                        ),
-                    );
+                    note(Level::Warn, format!("{tag}: na chůzi nezbývá žádný čas ({why})."));
                 }
                 Some(v) if v < MIN_SPEED_KMH && want_over_max => {
                     speed_note = true;
-                    note(
-                        Level::Warn,
-                        format!(
-                            "{tag} vychází jen na {} km/h ({}, pobyt nejvýš {} min).",
-                            dec(v, 1),
-                            used.label(),
-                            hi.round()
-                        ),
-                    );
+                    note(Level::Warn, format!("{tag} vychází jen na {} km/h ({why}).", dec(v, 1)));
                 }
                 _ => {}
             }
@@ -994,11 +984,11 @@ pub mod tests {
     use super::*;
     use crate::input::parse_manifest;
 
-    pub const RACE_TOML: &str = include_str!("../data/race.toml");
-    pub const M_TIMES: &str = include_str!("../data/m_casy.csv");
-    pub const M_HINTS: &str = include_str!("../data/m_napovedy.csv");
-    pub const M_GPX: &str = include_str!("../data/trasa_m.gpx");
-    pub const M_SITES: &str = include_str!("../data/m_stanoviste.csv");
+    pub const RACE_TOML: &str = include_str!("../testdata/race.toml");
+    pub const M_TIMES: &str = include_str!("../testdata/m_casy.csv");
+    pub const M_HINTS: &str = include_str!("../testdata/m_napovedy.csv");
+    pub const M_GPX: &str = include_str!("../testdata/trasa_m.gpx");
+    pub const M_SITES: &str = include_str!("../testdata/m_stanoviste.csv");
 
     pub fn race_m() -> Race {
         let m = parse_manifest(RACE_TOML).unwrap();
@@ -1078,10 +1068,8 @@ pub mod tests {
         if let Outcome::Finished { place: Some(p), .. } = &patrol(&r, "16").outcome {
             assert_eq!(p.ranked, 19);
         }
-        assert!(r
-            .notes
-            .iter()
-            .any(|n| n.level == Level::Warn && n.text.contains("hlídky 11, 12 mají v cíli přesně čas limitu 16:15")));
+        // a finish exactly at the limit is a real time: disqualified, no special note
+        assert!(!r.notes.iter().any(|n| n.text.contains("přesně čas limitu")));
     }
 
     #[test]
@@ -1153,6 +1141,49 @@ pub mod tests {
     }
 
     #[test]
+    fn solution_means_exactly_40_minutes() {
+        let s = Settings { speed_kmh: 5.0, hint_after: 20.0, solution_after: 40.0, merge_radius_m: 15.0 };
+        let sites: Vec<String> = ["A", "B", "C", "D"].iter().map(|x| x.to_string()).collect();
+        let rec = [Hint::Unknown, Hint::Solution, Hint::Solution, Hint::Unknown];
+        // 1 km takes 12 min at 5 km/h. B: an 80 min interval, C: a 45 min interval.
+        let a = [0.0, 10.0, 90.0, 135.0];
+        let mut notes = Vec::new();
+        let iv = split_patrol(&a, &[false; 4], &rec, &[0.5, 1.0, 1.0], &s, &sites, |l, tx| notes.push((l, tx)));
+        // exactly 40 min at B even though the walk would need only 12: the walk takes the rest
+        assert_eq!((iv[1].stay, iv[1].walk), (40.0, 40.0));
+        assert!(notes
+            .iter()
+            .any(|(_, tx)| tx.contains("přesun B → C vychází jen na 1,5 km/h (totálka, pobyt právě 40 min)")));
+        // exactly 40 min at C too, so only 5 min are left for 1 km (12 km/h, still no note)
+        assert_eq!((iv[2].stay, iv[2].walk), (40.0, 5.0));
+        assert!(!notes.iter().any(|(_, tx)| tx.contains("přesun C → D")));
+    }
+
+    #[test]
+    fn speed_is_set_per_category() {
+        let mut m = parse_manifest(RACE_TOML).unwrap();
+        let input = |m: &Manifest| CategoryInput {
+            manifest: m.categories[0].clone(),
+            times: Ok(M_TIMES.into()),
+            hints: Some(Ok(M_HINTS.into())),
+            route: Ok(M_GPX.into()),
+            sites: Ok(M_SITES.into()),
+        };
+        let base = build(&m, vec![input(&m)]).unwrap();
+        assert_eq!(base.categories[0].speed_kmh, 5.0);
+        m.categories[0].speed_kmh = Some(3.0);
+        let slow = build(&m, vec![input(&m)]).unwrap();
+        assert_eq!(slow.categories[0].speed_kmh, 3.0);
+        // patrol 1, M1 -> M2 with no hint: a slower assumed speed leaves less time for the stay
+        let (b, w) = (&base.categories[0].patrols[0].intervals[1], &slow.categories[0].patrols[0].intervals[1]);
+        assert!(w.stay < b.stay, "{} {}", w.stay, b.stay);
+        // the race-wide value is the default when a category has none
+        m.categories[0].speed_kmh = None;
+        m.speed_kmh = 4.0;
+        assert_eq!(build(&m, vec![input(&m)]).unwrap().categories[0].speed_kmh, 4.0);
+    }
+
+    #[test]
     fn impossible_hint_becomes_unknown() {
         let r = race_m();
         let p = patrol(&r, "6");
@@ -1199,11 +1230,11 @@ pub mod tests {
         assert!(off.iter().all(|&d| d < 0.01));
     }
 
-    /*#[test]
+    #[test]
     fn shared_locations_merge_across_categories() {
         let m = parse_manifest(&format!(
             "{RACE_TOML}\n[[category]]\nid = \"S\"\nname = \"Kategorie S\"\ncolor = \"#e0b000\"\nlimit = \"16:15\"\n\
-             times = \"s.csv\"\nroute = \"s.gpx\"\nsites = \"s.csv\"\n"
+                 times = \"s.csv\"\nroute = \"s.gpx\"\nsites = \"s.csv\"\n"
         ))
         .unwrap();
         let m_input = CategoryInput {
@@ -1214,7 +1245,7 @@ pub mod tests {
             sites: Ok(M_SITES.into()),
         };
         // S shares the start, M3 (5 m away) and the finish
-        let s_sites = "stanoviste,lat,lon\nS0,49.228498,16.698576\nS1,49.232870,16.676360\nS2,49.240000,16.680000\nSZ,49.245900,16.675795\nCíl,49.245900,16.675795\n";
+        let s_sites = "stanoviste,lat,lon\nS0,49.2283375,16.6976417\nS1,49.2348300,16.6743700\nS2,49.240000,16.680000\nSZ,49.2460150,16.6760264\nCíl,49.2460150,16.6760264\n";
         let s_input = CategoryInput {
             manifest: m.categories[1].clone(),
             times: Ok("č,S0,S1,S2,SZ,Cíl\n1,09:50,10:40,11:30,12:10,12:12\n".into()),
@@ -1231,7 +1262,7 @@ pub mod tests {
         assert_eq!(r.locations[cm.site_loc[8]].label[2], (None, "Cíl".to_string()));
         assert_eq!(r.locations.len(), 8 + 1); // only S2 is new
         assert!(r.notes.iter().any(|n| n.text.contains("Kategorie S nemá soubor s nápovědami")));
-    }*/
+    }
 
     #[test]
     fn broken_category_is_skipped_not_fatal() {

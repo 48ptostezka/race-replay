@@ -1,5 +1,9 @@
 //! The Leaflet map: cached Mapy.com tiles as they are, and on top the routes, the
-//! locations and one dot per patrol, moved every frame (design doc, section 6).
+//! locations and one numbered dot per patrol, moved every frame (design doc, section 6).
+//!
+//! Layers, bottom to top: tiles, routes (own pane), control circles, location labels
+//! (own pane), start/finish symbols and patrol dots (marker pane). So patrol dots are
+//! always above the routes and the labels, whatever is selected.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -9,19 +13,25 @@ use serde_json::json;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::geo::{project, unproject, LatLon};
+use crate::geo::{project, unproject};
 use crate::input::TileManifest;
-use crate::layout::{nudge, ring_slots};
+use crate::layout::{nudge, ring_slots, DOT_PX};
 use crate::leaflet::{self as l, escape, js, latlng, Layer, Map};
 use crate::model::{LocKind, Race};
 use crate::sim::{number_key, state_at, Kind};
 use crate::state::Sel;
 
 pub const COURSE: &str = "#a8126f";
-pub const AMBER: &str = "#c98500";
 pub const INK: &str = "#1d1f22";
 const TILES: &str = "tiles";
 const OVERZOOM: u8 = 2;
+/// Leaflet panes created for the app (styled in style.css by their class names
+/// `leaflet-routes-pane` and `leaflet-labels-pane`).
+const ROUTES_PANE: &str = "routes";
+const LABELS_PANE: &str = "labels";
+/// Marker z-index offsets: location symbols below dots, the selected dot on top.
+const Z_LOCATION: i32 = -10_000;
+const Z_SELECTED: i32 = 10_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Look {
@@ -31,10 +41,12 @@ enum Look {
     Disqualified,
 }
 
+/// How a dot is drawn: its state, an estimated time, selected.
+type Style = (Look, bool, bool);
+
 struct Dot {
-    edge: Layer,
-    dot: Layer,
-    look: Option<(Look, bool)>,
+    marker: Layer,
+    style: Option<Style>,
 }
 
 struct Route {
@@ -48,8 +60,6 @@ pub struct MapView {
     map: Map,
     dots: Vec<Vec<Dot>>,
     routes: Vec<Route>,
-    halo: Layer,
-    halo_on: bool,
     shown: Vec<bool>,
     last: Option<(f64, Option<Sel>, Vec<bool>)>,
     _closures: Vec<Closure<dyn FnMut(JsValue)>>,
@@ -81,6 +91,8 @@ pub fn create(
         opts["maxBoundsViscosity"] = json!(0.8);
     }
     let map = l::new_map(el, &js(opts));
+    map.create_pane(ROUTES_PANE);
+    map.create_pane(LABELS_PANE);
 
     // Tiles from the local folder, one base layer per cached map set.
     if let Some(t) = tiles {
@@ -110,7 +122,7 @@ pub fn create(
     }
     l::control_scale(&js(json!({ "imperial": false, "position": "bottomright" }))).add_to(&map);
 
-    // Routes.
+    // Routes, in their own pane below everything else drawn by the app.
     let mut routes = Vec::new();
     let (mut bs, mut bw, mut bn, mut be) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for c in &race.categories {
@@ -120,11 +132,13 @@ pub fn create(
         }
         let casing = l::polyline(
             &js(json!(pts)),
-            &js(json!({ "color": "#ffffff", "opacity": 0.7, "weight": 6, "interactive": false, "lineJoin": "round" })),
+            &js(json!({ "pane": ROUTES_PANE, "color": "#ffffff", "opacity": 0.7, "weight": 6,
+                        "interactive": false, "lineJoin": "round" })),
         );
         let line = l::polyline(
             &js(json!(pts)),
-            &js(json!({ "color": c.color, "opacity": 0.55, "weight": 3, "interactive": false, "lineJoin": "round" })),
+            &js(json!({ "pane": ROUTES_PANE, "color": c.color, "opacity": 0.55, "weight": 3,
+                        "interactive": false, "lineJoin": "round" })),
         );
         casing.add_to(&map);
         line.add_to(&map);
@@ -136,9 +150,8 @@ pub fn create(
         let layer = match loc.kind {
             LocKind::Control => l::circle_marker(
                 &latlng(loc.pos),
-                &js(
-                    json!({ "radius": 11, "color": COURSE, "weight": 2.4, "fillColor": "#ffffff", "fillOpacity": 0.35, "bubblingMouseEvents": false }),
-                ),
+                &js(json!({ "radius": 11, "color": COURSE, "weight": 2.4, "fillColor": "#ffffff",
+                            "fillOpacity": 0.35, "bubblingMouseEvents": false })),
             ),
             LocKind::Start | LocKind::Finish => {
                 let svg = if loc.kind == LocKind::Start {
@@ -149,10 +162,7 @@ pub fn create(
                 let icon = l::div_icon(&js(
                     json!({ "html": svg, "className": "loc-icon", "iconSize": [30, 30], "iconAnchor": [15, 15] }),
                 ));
-                let opts = js_sys::Object::new();
-                let _ = js_sys::Reflect::set(&opts, &"icon".into(), &icon);
-                let _ = js_sys::Reflect::set(&opts, &"keyboard".into(), &JsValue::FALSE);
-                l::marker(&latlng(loc.pos), &opts)
+                l::marker(&latlng(loc.pos), &marker_options(&icon, Z_LOCATION))
             }
         };
         let label: String = loc
@@ -164,7 +174,11 @@ pub fn create(
             })
             .collect::<Vec<_>>()
             .join("<span class=\"sep\"> · </span>");
-        layer.bind_tooltip(&label, &js(json!({ "permanent": true, "direction": "right", "offset": [22, 0], "className": "loc-label", "interactive": false })));
+        layer.bind_tooltip(
+            &label,
+            &js(json!({ "permanent": true, "direction": "right", "offset": [22, 0], "className": "loc-label",
+                        "interactive": false, "pane": LABELS_PANE })),
+        );
         let cb = on_select.clone();
         let click = Closure::<dyn FnMut(JsValue)>::new(move |_| cb(Some(Sel::Location(li))));
         layer.layer_on("click", click.as_ref().unchecked_ref());
@@ -172,44 +186,23 @@ pub fn create(
         layer.add_to(&map);
     }
 
-    // One dot per patrol (with a thin dark edge underneath, for light colours).
+    // One numbered dot per patrol.
     let mut dots = Vec::new();
     for (ci, c) in race.categories.iter().enumerate() {
         let mut row = Vec::new();
-        for (pi, _) in c.patrols.iter().enumerate() {
+        for (pi, p) in c.patrols.iter().enumerate() {
             let start = race.locations[c.site_loc[0]].pos;
-            let edge = l::circle_marker(
-                &latlng(start),
-                &js(
-                    json!({ "radius": 8.5, "stroke": false, "fillColor": INK, "fillOpacity": 0.5, "interactive": false }),
-                ),
-            );
-            let dot = l::circle_marker(
-                &latlng(start),
-                &js(
-                    json!({ "radius": 6.5, "color": "#ffffff", "weight": 1.5, "fillColor": c.color, "fillOpacity": 1, "bubblingMouseEvents": false }),
-                ),
-            );
+            let icon = dot_icon(&p.id, &c.color, (Look::Waiting, false, false));
+            let marker = l::marker(&latlng(start), &marker_options(&icon, 0));
             let cb = on_select.clone();
             let click = Closure::<dyn FnMut(JsValue)>::new(move |_| cb(Some(Sel::Patrol { cat: ci, patrol: pi })));
-            dot.layer_on("click", click.as_ref().unchecked_ref());
+            marker.layer_on("click", click.as_ref().unchecked_ref());
             closures.push(click);
-            edge.add_to(&map);
-            dot.add_to(&map);
-            row.push(Dot { edge, dot, look: None });
+            marker.add_to(&map);
+            row.push(Dot { marker, style: Some((Look::Waiting, false, false)) });
         }
         dots.push(row);
     }
-
-    // Halo and name tag of the selected patrol.
-    let halo = l::circle_marker(
-        &latlng(race.locations[0].pos),
-        &js(json!({ "radius": 14, "weight": 1.5, "fillOpacity": 0.18, "interactive": false })),
-    );
-    halo.bind_tooltip(
-        "",
-        &js(json!({ "permanent": true, "direction": "top", "offset": [0, -12], "className": "sel-tag" })),
-    );
 
     // A click on the empty map closes the panel.
     let cb = on_select.clone();
@@ -233,17 +226,67 @@ pub fn create(
         map.fit_bounds(&js(json!([[bs, bw], [bn, be]])), &js(json!({ "padding": [30, 30] })));
     }
     let n = race.categories.len();
-    *holder.borrow_mut() = Some(MapView {
-        race,
-        map,
-        dots,
-        routes,
-        halo,
-        halo_on: false,
-        shown: vec![true; n],
-        last: None,
-        _closures: closures,
+    *holder.borrow_mut() =
+        Some(MapView { race, map, dots, routes, shown: vec![true; n], last: None, _closures: closures });
+}
+
+/// Marker options with a ready-made icon object (built directly: a JSON round trip
+/// would turn the icon into a plain object).
+fn marker_options(icon: &JsValue, z_offset: i32) -> JsValue {
+    let opts = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&opts, &"icon".into(), icon);
+    let _ = js_sys::Reflect::set(&opts, &"keyboard".into(), &JsValue::FALSE);
+    let _ = js_sys::Reflect::set(&opts, &"zIndexOffset".into(), &JsValue::from(z_offset));
+    opts.into()
+}
+
+/// The icon of a patrol dot: the patrol number on the category colour.
+fn dot_icon(id: &str, color: &str, (look, est, selected): Style) -> JsValue {
+    let mut class = String::from("pdot");
+    class.push_str(match look {
+        Look::Waiting => " waiting",
+        Look::Active => "",
+        Look::Finished => " finished",
+        Look::Disqualified => " dq",
     });
+    if est {
+        class.push_str(" est");
+    }
+    if selected {
+        class.push_str(" sel");
+    }
+    if id.chars().count() > 2 {
+        class.push_str(" long");
+    }
+    let html = format!("<span style=\"--c:{};--t:{}\">{}</span>", escape(color), text_on(color), escape(id));
+    let size = DOT_PX;
+    l::div_icon(&js(json!({
+        "html": html, "className": class,
+        "iconSize": [size, size], "iconAnchor": [size / 2.0, size / 2.0],
+    })))
+}
+
+/// White or dark text, whichever reads better on `color` (`#rrggbb`): white unless its
+/// contrast with the colour is under 3:1 (as on yellow).
+pub fn text_on(color: &str) -> &'static str {
+    let hex = color.trim().trim_start_matches('#');
+    let channel = |i: usize| {
+        let v = hex.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()).unwrap_or(0) as f64 / 255.0;
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    if hex.len() != 6 {
+        return "#ffffff";
+    }
+    let lum = 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+    if 1.05 / (lum + 0.05) >= 3.0 {
+        "#ffffff"
+    } else {
+        INK
+    }
 }
 
 fn mapset_label(name: &str) -> &str {
@@ -269,20 +312,23 @@ impl MapView {
         self.last = Some((t, sel, visible.to_vec()));
         let race = self.race.clone();
         let zoom = self.map.get_zoom();
+        let selected = match sel {
+            Some(Sel::Patrol { cat, patrol }) => Some((cat, patrol)),
+            _ => None,
+        };
 
         // Show or hide whole categories.
         for (ci, shown) in self.shown.iter_mut().enumerate() {
             let want = visible.get(ci).copied().unwrap_or(true);
             if want != *shown {
                 let r = &self.routes[ci];
-                for d in &self.dots[ci] {
+                for d in self.dots[ci].iter_mut() {
                     if want {
-                        d.edge.add_to(&self.map);
-                        d.dot.add_to(&self.map);
+                        d.marker.add_to(&self.map);
                     } else {
-                        d.edge.remove();
-                        d.dot.remove();
+                        d.marker.remove();
                     }
+                    d.style = None; // restyle after showing again
                 }
                 if want {
                     r.casing.add_to(&self.map);
@@ -298,7 +344,7 @@ impl MapView {
         // States; group dots by location, collect walking dots.
         let mut groups: HashMap<usize, Vec<Member>> = HashMap::new();
         let mut walkers: Vec<Walker> = Vec::new();
-        let mut looks: Vec<Vec<(Look, bool)>> = Vec::new();
+        let mut styles: Vec<Vec<Style>> = Vec::new();
         for (ci, c) in race.categories.iter().enumerate() {
             let mut row = Vec::with_capacity(c.patrols.len());
             for pi in 0..c.patrols.len() {
@@ -309,7 +355,7 @@ impl MapView {
                     Kind::Finished => Look::Finished,
                     Kind::Disqualified => Look::Disqualified,
                 };
-                row.push((look, st.estimated));
+                row.push((look, st.estimated, selected == Some((ci, pi))));
                 if !self.shown[ci] {
                     continue;
                 }
@@ -329,50 +375,40 @@ impl MapView {
                     _ => {}
                 }
             }
-            looks.push(row);
+            styles.push(row);
         }
-        let mut positions: HashMap<(usize, usize), LatLon> = HashMap::new();
-        let mut place = |ci: usize, pi: usize, p: LatLon| {
-            positions.insert((ci, pi), p);
-            let ll = latlng(p);
-            let d = &self.dots[ci][pi];
-            d.edge.set_lat_lng(&ll);
-            d.dot.set_lat_lng(&ll);
-        };
         for (loc, mut members) in groups {
             members.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
             let (cx, cy) = project(race.locations[loc].pos, zoom);
             for ((_, ci, _, pi), (ox, oy)) in members.iter().zip(ring_slots(members.len())) {
-                place(*ci, *pi, unproject(cx + ox, cy + oy, zoom));
+                self.dots[*ci][*pi].marker.set_lat_lng(&latlng(unproject(cx + ox, cy + oy, zoom)));
             }
         }
         let mut pts: Vec<(f64, f64, f64, f64)> = walkers.iter().map(|w| w.2).collect();
         nudge(&mut pts);
         for ((ci, pi, _), (x, y, _, _)) in walkers.iter().zip(pts) {
-            place(*ci, *pi, unproject(x, y, zoom));
+            self.dots[*ci][*pi].marker.set_lat_lng(&latlng(unproject(x, y, zoom)));
         }
 
-        // Styles, only where they changed.
-        for (ci, row) in looks.iter().enumerate() {
-            let color = race.categories[ci].color.as_str();
-            for (pi, &look) in row.iter().enumerate() {
+        // Icons, only where the style changed; the selected dot is drawn on top.
+        for (ci, row) in styles.iter().enumerate() {
+            if !self.shown[ci] {
+                continue;
+            }
+            let c = &race.categories[ci];
+            for (pi, &style) in row.iter().enumerate() {
                 let d = &mut self.dots[ci][pi];
-                if d.look == Some(look) {
+                if d.style == Some(style) {
                     continue;
                 }
-                let (kind, est) = look;
-                let (dot, edge) = dot_style(kind, est, color);
-                d.dot.set_style(&js(dot));
-                d.edge.set_style(&js(json!({ "fillOpacity": edge })));
-                d.look = Some(look);
+                d.marker.set_icon(&dot_icon(&c.patrols[pi].id, &c.color, style));
+                d.marker.set_z_index_offset(if style.2 { Z_SELECTED } else { 0 });
+                d.style = Some(style);
             }
         }
 
-        // The selected patrol's route is drawn stronger.
-        let strong_cat = match sel {
-            Some(Sel::Patrol { cat, .. }) => Some(cat),
-            _ => None,
-        };
+        // The selected patrol's route is drawn stronger (it stays in the routes pane).
+        let strong_cat = selected.map(|(c, _)| c);
         for (ci, r) in self.routes.iter_mut().enumerate() {
             let strong = strong_cat == Some(ci);
             if r.strong != Some(strong) {
@@ -388,60 +424,19 @@ impl MapView {
                 r.strong = Some(strong);
             }
         }
-
-        // Halo and name tag.
-        match sel {
-            Some(Sel::Patrol { cat, patrol }) if self.shown.get(cat).copied().unwrap_or(false) => {
-                let c = &race.categories[cat];
-                let pos = positions.get(&(cat, patrol)).copied().unwrap_or_else(|| state_at(&race, cat, patrol, t).pos);
-                let d = &self.dots[cat][patrol];
-                self.halo.set_lat_lng(&latlng(pos));
-                self.halo.set_style(&js(json!({ "color": c.color, "fillColor": c.color })));
-                self.halo.set_tooltip_content(&format!("{} {}", escape(&c.id), escape(&c.patrols[patrol].id)));
-                if !self.halo_on {
-                    self.halo.add_to(&self.map);
-                    self.halo_on = true;
-                }
-                d.edge.bring_to_front();
-                d.dot.bring_to_front();
-            }
-            _ => {
-                if self.halo_on {
-                    self.halo.remove();
-                    self.halo_on = false;
-                }
-            }
-        }
     }
 }
 
-/// Dot style and the opacity of its dark edge (design doc, section 4).
-fn dot_style(kind: Look, est: bool, color: &str) -> (serde_json::Value, f64) {
-    let (mut s, edge) = match kind {
-        Look::Waiting => {
-            (json!({ "fillColor": color, "fillOpacity": 0.4, "color": "#ffffff", "opacity": 0.6, "weight": 1.5 }), 0.2)
-        }
-        Look::Active => {
-            (json!({ "fillColor": color, "fillOpacity": 1, "color": "#ffffff", "opacity": 1, "weight": 1.5 }), 0.5)
-        }
-        Look::Finished => (
-            json!({ "fillColor": color, "fillOpacity": 0.45, "color": "#ffffff", "opacity": 0.7, "weight": 1.5 }),
-            0.22,
-        ),
-        Look::Disqualified => {
-            (json!({ "fillColor": "#ffffff", "fillOpacity": 1, "color": color, "opacity": 1, "weight": 2.4 }), 0.35)
-        }
-    };
-    s["dashArray"] = serde_json::Value::Null;
-    if est {
-        if kind == Look::Disqualified {
-            s["dashArray"] = json!("3 2");
-        } else {
-            s["color"] = json!(AMBER);
-            s["opacity"] = json!(1);
-            s["weight"] = json!(2);
-            s["dashArray"] = json!("3 2");
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn number_colour_on_category_colours() {
+        assert_eq!(text_on("#2f9e44"), "#ffffff"); // green
+        assert_eq!(text_on("#d6392f"), "#ffffff"); // red
+        assert_eq!(text_on("#e0b000"), INK); // yellow
+        assert_eq!(text_on("#ffffff"), INK);
+        assert_eq!(text_on("red"), "#ffffff"); // not #rrggbb: default
     }
-    (s, edge)
 }

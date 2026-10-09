@@ -1,8 +1,8 @@
 # Popis závodu pro aplikaci. Cesty k souborům jsou relativní ke složce data/.
 title = "ZaPsem 2026"
-speed_kmh = 5            # předpokládaná rychlost chůze pro odhad pobytu a přesunu
+speed_kmh = 5            # výchozí rychlost chůze; kategorie ji může přepsat vlastní hodnotou
 hint_after_min = 20      # nápověda nejdřív po 20 minutách na stanovišti
-solution_after_min = 40  # totálka nejdřív po 40 minutách
+solution_after_min = 40  # totálka po 40 minutách, hlídka pak hned odchází
 merge_radius_m = 15      # stanoviště blíž než tato vzdálenost jsou jedno místo
 
 [[category]]
@@ -10,6 +10,7 @@ id = "M"                 # předpona názvů stanovišť: M0, M1, ... MZ
 name = "Kategorie M"
 color = "#2f9e44"        # zelená
 limit = "16:15"          # do cíle v tento čas nebo později = diskvalifikace
+speed_kmh = 4            # předpokládaná rychlost chůze této kategorie (km/h)
 times = "m_casy.csv"
 hints = "m_napovedy.csv"
 route = "trasa_m.gpx"
@@ -20,6 +21,7 @@ id = "S"
 name = "Kategorie S"
 color = "#e0b000"      # žlutá
 limit = "16:15"
+speed_kmh = 5
 times = "s_casy.csv"
 hints = "s_napovedy.csv"
 route = "trasa_s.gpx"
@@ -30,6 +32,7 @@ id = "R"
 name = "Kategorie R"
 color = "#d6392f"      # červená
 limit = "16:15"
+speed_kmh = 6
 times = "r_casy.csv"
 hints = "r_napovedy.csv"
 route = "trasa_r.gpx"

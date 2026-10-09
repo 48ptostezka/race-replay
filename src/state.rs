@@ -7,12 +7,17 @@ use yew::Reducible;
 /// What the side panel shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sel {
-    Patrol { cat: usize, patrol: usize },
+    Patrol {
+        cat: usize,
+        patrol: usize,
+    },
     Location(usize),
+    /// "Jak to funguje?": how the positions are estimated.
+    Info,
 }
 
 /// Playback speeds, race minutes per second.
-pub const SPEEDS: [f64; 4] = [5.0, 10.0, 20.0, 40.0];
+pub const SPEEDS: [f64; 5] = [1.0, 2.0, 5.0, 10.0, 20.0];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ui {
@@ -29,7 +34,7 @@ pub struct Ui {
 
 impl Ui {
     pub fn new(t0: f64, t1: f64, categories: usize) -> Self {
-        Self { t: t0, t0, t1, playing: false, speed: 10.0, sel: None, visible: vec![true; categories] }
+        Self { t: t0, t0, t1, playing: false, speed: 5.0, sel: None, visible: vec![true; categories] }
     }
 
     /// The whole minute shown on the clock and used by the panels.
@@ -123,9 +128,9 @@ mod tests {
         let ui = Ui::new(585.0, 975.0, 2);
         let s = run(ui.clone(), vec![Action::TogglePlay, Action::Tick(0.1)]);
         assert!(s.playing);
-        assert!((s.t - 586.0).abs() < 1e-9); // 10 min/s for 0.1 s
+        assert!((s.t - 585.5).abs() < 1e-9); // 5 min/s for 0.1 s
         let s =
-            run(ui.clone(), vec![Action::SetTime(970.0), Action::TogglePlay, Action::Tick(0.25), Action::Tick(0.25)]);
+            run(ui.clone(), vec![Action::SetTime(973.0), Action::TogglePlay, Action::Tick(0.25), Action::Tick(0.25)]);
         assert_eq!(s.t, 975.0);
         assert!(!s.playing); // stops at the end
         let s = run(s, vec![Action::TogglePlay]);

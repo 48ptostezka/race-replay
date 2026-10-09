@@ -1,6 +1,7 @@
 //! Patrol state and position at time t (design doc, section 4), plus who is at a location.
 
 use crate::geo::LatLon;
+use crate::input::Hint;
 use crate::model::{Interval, Outcome, Patrol, Race};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -116,6 +117,89 @@ pub fn number_key(id: &str) -> (u64, String) {
     }
 }
 
+/// Hints and solutions a patrol has taken by time t. A hint counts 20 min after the
+/// arrival at its site and a solution 40 min after it (or when the patrol left the site,
+/// if that was earlier). Sites the patrol never reached do not count.
+pub fn taken_by(race: &Race, cat: usize, pi: usize, t: f64) -> (u32, u32) {
+    let s = &race.settings;
+    let p = &race.categories[cat].patrols[pi];
+    let (mut hints, mut solutions) = (0, 0);
+    for (k, &rec) in p.records.iter().enumerate() {
+        if k == 0 || !matches!(rec, Hint::Hint | Hint::Solution) {
+            continue;
+        }
+        let Some(&arrive) = p.arrivals.get(k) else { continue };
+        let leave = p.intervals.get(k).map_or(f64::INFINITY, |iv| iv.leave);
+        if t >= (arrive + s.hint_after).min(leave) {
+            hints += 1;
+        }
+        if rec == Hint::Solution && t >= (arrive + s.solution_after).min(leave) {
+            solutions += 1;
+        }
+    }
+    (hints, solutions)
+}
+
+/// Distance the patrol still has to walk to the finish along its route at time t, metres.
+pub fn remaining_m(race: &Race, cat: usize, pi: usize, t: f64) -> f64 {
+    let c = &race.categories[cat];
+    let p = &c.patrols[pi];
+    let to = |k: usize| c.legs[..k].iter().map(|l| l.length_m).sum::<f64>();
+    let done = match state_at(race, cat, pi, t).kind {
+        Kind::Waiting => 0.0,
+        Kind::AtSite { k, .. } => to(k),
+        Kind::Walking { k, frac } => to(k) + frac * c.legs[k].length_m,
+        Kind::Finished | Kind::Disqualified => to(p.last),
+    };
+    to(c.legs.len()) - done
+}
+
+/// A patrol's position in its category: places `first`..=`last` (equal when not tied).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing {
+    Rank { first: usize, last: usize },
+    Disqualified,
+}
+
+impl Standing {
+    /// "4." or "4.–5." or "diskv."
+    pub fn label(&self) -> String {
+        match *self {
+            Standing::Rank { first, last } if first == last => format!("{first}."),
+            Standing::Rank { first, last } => format!("{first}.–{last}."),
+            Standing::Disqualified => "diskv.".to_string(),
+        }
+    }
+}
+
+/// Current position at time t: patrols in the finish first, in the order of the final
+/// placement, then everyone else by the distance left to the finish (equal distance =
+/// shared place). A disqualified patrol has no position from the moment it is disqualified.
+pub fn standing(race: &Race, cat: usize, pi: usize, t: f64) -> Standing {
+    let c = &race.categories[cat];
+    let key = |q: usize| -> Option<(u8, i64, u32, u32)> {
+        let p = &c.patrols[q];
+        match (state_at(race, cat, q, t).kind, &p.outcome) {
+            (Kind::Disqualified, _) => None,
+            (Kind::Finished, Outcome::Finished { race_min, .. }) => Some((0, *race_min, p.solutions, p.hints)),
+            _ => Some((1, remaining_m(race, cat, q, t).round() as i64, 0, 0)),
+        }
+    };
+    let Some(mine) = key(pi) else { return Standing::Disqualified };
+    let keys: Vec<_> = (0..c.patrols.len()).filter_map(key).collect();
+    let better = keys.iter().filter(|k| **k < mine).count();
+    let same = keys.iter().filter(|k| **k == mine).count();
+    Standing::Rank { first: better + 1, last: better + same }
+}
+
+/// The final position: the placement, or "diskv.".
+pub fn final_standing(race: &Race, cat: usize, pi: usize) -> Standing {
+    match &race.categories[cat].patrols[pi].outcome {
+        Outcome::Finished { place: Some(p), .. } => Standing::Rank { first: p.first, last: p.last },
+        _ => Standing::Disqualified,
+    }
+}
+
 /// Counts of a category at time t: (on course incl. waiting, finished, disqualified).
 pub fn counts(race: &Race, cat: usize, t: f64) -> (usize, usize, usize) {
     let mut c = (0, 0, 0);
@@ -186,6 +270,52 @@ mod tests {
         }
         // at the moment of arrival the patrol is at the next site
         assert_eq!(state_at(&r, 0, p, iv.next).kind, Kind::AtSite { k: 5, since: iv.next });
+    }
+
+    #[test]
+    fn hints_and_solutions_taken_so_far() {
+        let r = race_m();
+        let p = idx(&r, "4"); // records M1..MZ: N N T T - N -, arrivals M1 10:16, M3 12:35
+        assert_eq!(taken_by(&r, 0, p, t("10:35")), (0, 0));
+        assert_eq!(taken_by(&r, 0, p, t("10:36")), (1, 0)); // 20 min after the arrival at M1
+                                                            // M3: totálka; arrival 12:35, the hint at 12:55, the solution at 13:15 (then it leaves)
+        let before = taken_by(&r, 0, p, t("12:54"));
+        assert_eq!(taken_by(&r, 0, p, t("12:55")), (before.0 + 1, before.1));
+        assert_eq!(taken_by(&r, 0, p, t("13:15")), (before.0 + 1, before.1 + 1));
+        // at the end the counts equal the totals
+        let q = &r.categories[0].patrols[p];
+        assert_eq!(taken_by(&r, 0, p, t("23:59")), (q.hints, q.solutions));
+        // an impossible hint (patrol 6 at M6, next site after 18 min) counts when it leaves
+        let p6 = idx(&r, "6");
+        let iv = r.categories[0].patrols[p6].intervals[6].clone();
+        assert!(iv.leave < iv.arrive + 20.0);
+        let (h_before, _) = taken_by(&r, 0, p6, iv.leave - 0.01);
+        assert_eq!(taken_by(&r, 0, p6, iv.leave).0, h_before + 1);
+    }
+
+    #[test]
+    fn current_position() {
+        let r = race_m();
+        let st = |id: &str, hhmm: &str| standing(&r, 0, idx(&r, id), t(hhmm)).label();
+        // at the start everyone shares the first place
+        assert_eq!(st("1", "09:45"), "1.–21.");
+        // at 13:24 the five finished patrols lead in their final order
+        assert_eq!(st("16", "13:24"), "1.");
+        assert_eq!(st("1", "13:24"), "2.");
+        assert_eq!(st("8", "13:24"), "5.");
+        // patrol 11 has a position during the race and is "diskv." from 16:15
+        assert!(st("11", "16:00").ends_with('.') && st("11", "16:00") != "diskv.");
+        assert_eq!(st("11", "16:15"), "diskv.");
+        assert_eq!(final_standing(&r, 0, idx(&r, "11")).label(), "diskv.");
+        assert_eq!(final_standing(&r, 0, idx(&r, "15")).label(), "3.");
+        // at the end the current position equals the final one
+        for id in ["1", "4", "16", "19"] {
+            assert_eq!(st(id, "16:15"), final_standing(&r, 0, idx(&r, id)).label(), "{id}");
+        }
+        // remaining distance shrinks while walking
+        let p = idx(&r, "14");
+        let iv = r.categories[0].patrols[p].intervals[4].clone();
+        assert!(remaining_m(&r, 0, p, iv.next - 1.0) < remaining_m(&r, 0, p, iv.leave + 1.0));
     }
 
     #[test]

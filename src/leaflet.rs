@@ -22,6 +22,10 @@ extern "C" {
     #[wasm_bindgen(method, js_name = on)]
     pub fn map_on(this: &Map, event: &str, handler: &js_sys::Function);
 
+    /// Creates a pane; its element gets the class `leaflet-<name>-pane`.
+    #[wasm_bindgen(method, js_name = createPane)]
+    pub fn create_pane(this: &Map, name: &str) -> web_sys::HtmlElement;
+
     /// Any `L.Layer` (tile layer, polyline, circle marker, marker).
     pub type Layer;
 
@@ -37,9 +41,6 @@ extern "C" {
     #[wasm_bindgen(method, js_name = bindTooltip)]
     pub fn bind_tooltip(this: &Layer, content: &str, options: &JsValue) -> Layer;
 
-    #[wasm_bindgen(method, js_name = setTooltipContent)]
-    pub fn set_tooltip_content(this: &Layer, content: &str) -> Layer;
-
     #[wasm_bindgen(method, js_name = setLatLng)]
     pub fn set_lat_lng(this: &Layer, latlng: &JsValue) -> Layer;
 
@@ -48,6 +49,14 @@ extern "C" {
 
     #[wasm_bindgen(method, js_name = bringToFront)]
     pub fn bring_to_front(this: &Layer) -> Layer;
+
+    /// `L.Marker.setIcon`
+    #[wasm_bindgen(method, js_name = setIcon)]
+    pub fn set_icon(this: &Layer, icon: &JsValue) -> Layer;
+
+    /// `L.Marker.setZIndexOffset`
+    #[wasm_bindgen(method, js_name = setZIndexOffset)]
+    pub fn set_z_index_offset(this: &Layer, offset: i32) -> Layer;
 
     #[wasm_bindgen(js_namespace = L, js_name = tileLayer)]
     pub fn tile_layer(url_template: &str, options: &JsValue) -> Layer;

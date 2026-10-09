@@ -2,6 +2,9 @@
 
 use std::f64::consts::PI;
 
+/// Diameter of a patrol dot on screen, px (the original dot size; the number fits inside).
+pub const DOT_PX: f64 = 14.5;
+
 /// Pixel offsets for `n` dots around a location. Ring r (1-based) has radius
 /// 20 + 15 (r − 1) px and holds as many dots as fit 16 px apart: 7, 13, 19, …
 /// Slot 0 is at the top, then clockwise.
@@ -54,9 +57,9 @@ mod tests {
         assert!(s[7..].iter().all(|&p| (r(p) - 35.0).abs() < 1e-9));
         assert!((s[0].0).abs() < 1e-9 && s[0].1 < 0.0); // first slot at the top
         assert_eq!(ring_slots(7 + 13 + 1).iter().filter(|&&p| (r(p) - 50.0).abs() < 1e-9).count(), 1);
-        // neighbours on ring 1 are at least 16 px apart
+        // neighbours on ring 1 are at least 16 px apart, so the dots do not overlap
         let d = ((s[0].0 - s[1].0).powi(2) + (s[0].1 - s[1].1).powi(2)).sqrt();
-        assert!(d >= 16.0, "{d}");
+        assert!(d > DOT_PX, "{d}");
     }
 
     #[test]

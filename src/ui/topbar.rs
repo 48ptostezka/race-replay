@@ -5,7 +5,7 @@ use yew::prelude::*;
 use crate::app::DataRef;
 use crate::fmt::{hm, plural};
 use crate::sim::counts;
-use crate::state::{Action, Ui, SPEEDS};
+use crate::state::{Action, Sel, Ui, SPEEDS};
 
 #[derive(Properties, PartialEq)]
 pub struct TopBarProps {
@@ -14,6 +14,8 @@ pub struct TopBarProps {
     pub playing: bool,
     pub speed: f64,
     pub visible: Vec<bool>,
+    /// The "Jak to funguje?" panel is open.
+    pub info_open: bool,
     pub dispatch: UseReducerDispatcher<Ui>,
 }
 
@@ -36,11 +38,22 @@ pub fn top_bar(p: &TopBarProps) -> Html {
         let d = d.clone();
         Callback::from(move |_: MouseEvent| d.dispatch(Action::TogglePlay))
     };
+    let info = {
+        let d = d.clone();
+        let open = p.info_open;
+        Callback::from(move |_: MouseEvent| d.dispatch(Action::Select(if open { None } else { Some(Sel::Info) })))
+    };
 
     html! {
         <header class="topbar">
             <div class="title">
-                <h1>{ "Průběh závodu" }</h1>
+                <h1>
+                    { "Průběh závodu" }
+                    <button class={classes!("info-btn", p.info_open.then_some("on"))} onclick={info}
+                            aria-pressed={p.info_open.to_string()} title="Jak aplikace odhaduje polohu hlídek">
+                        { "Jak to funguje?" }
+                    </button>
+                </h1>
                 <p>{ format!("{} · {}", race.title, subtitle) }</p>
             </div>
             <div class="clock" aria-label="Čas závodu">{ hm(t) }</div>

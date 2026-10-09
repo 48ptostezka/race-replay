@@ -165,7 +165,7 @@ fn replay(props: &ReplayProps) -> Html {
     html! {
         <div class="app">
             <TopBar data={props.data.clone()} minute={minute} playing={ui.playing} speed={ui.speed}
-                    visible={ui.visible.clone()} dispatch={dispatch.clone()} />
+                    visible={ui.visible.clone()} info_open={ui.sel == Some(Sel::Info)} dispatch={dispatch.clone()} />
             <TimeBar t0={ui.t0} t1={ui.t1} t={ui.t} limits={limits} dispatch={dispatch.clone()} />
             <div class="body">
                 <div class="mapwrap">
@@ -250,7 +250,7 @@ mod ssr_tests {
         d.0.race.categories[0].patrols.iter().position(|p| p.id == id).unwrap()
     }
 
-    /*#[tokio::test]
+    #[tokio::test]
     async fn replay_screen() {
         let html = yew::LocalServerRenderer::<Replay>::with_props(ReplayProps { data: data() })
             .hydratable(false)
@@ -264,9 +264,11 @@ mod ssr_tests {
         assert!(tx.contains("Kategorie M 21 na trati 21 · v cíli 0"), "{tx}");
         assert!(tx.contains("limit M 16:15"));
         assert!(tx.contains("Přehled"));
+        assert!(tx.contains("Jak to funguje?"));
+        assert!(tx.contains("Rychlost 1 2 5 10 20 min/s"), "{tx}");
         assert!(tx.contains("Poznámky k datům"));
         assert!(html.contains("id=\"map\""));
-    }*/
+    }
 
     #[tokio::test]
     async fn patrol_walking() {
@@ -275,7 +277,8 @@ mod ssr_tests {
         std::fs::write(std::env::temp_dir().join("ssr_p14.html"), &html).ok();
         let tx = text(&html);
         assert!(tx.contains("Hlídka 14"), "{tx}");
-        assert!(tx.contains("Nápovědy 2 · Totálky 0"), "{tx}");
+        // hints so far / at the end: both hints (M2, M3) were taken by 12:00
+        assert!(tx.contains("Teď Na konci Nápovědy 2 2 Totálky 0 0 Pořadí"), "{tx}");
         assert!(tx.contains("Na cestě M3 → M4") || tx.contains("Na stanovišti M3"), "{tx}");
         assert!(tx.contains("Poslední stanoviště · M3"), "{tx}");
         assert!(tx.contains("Příchod 11:37"), "{tx}");
@@ -292,12 +295,22 @@ mod ssr_tests {
         assert!(tx.contains("Cíl 12:35"), "{tx}");
         assert!(tx.contains("Čas na trati 2 h 50 min"), "{tx}");
         assert!(tx.contains("Umístění 1. místo hodnoceno 19"), "{tx}");
+        assert!(tx.contains("Pořadí 1. 1."), "{tx}");
         let tx = text(&panel(Some(Sel::Patrol { cat: 0, patrol: idx(&d, "11") }), "16:15").await);
         assert!(tx.contains("Diskvalifikována"), "{tx}");
         assert!(tx.contains("do cíle v 16:15, limit 16:15"), "{tx}");
-        assert!(tx.contains("Nápovědy 6 · Totálky 2"), "{tx}");
+        assert!(tx.contains("Nápovědy 6 6 Totálky 2 2 Pořadí diskv. diskv."), "{tx}");
         let tx = text(&panel(Some(Sel::Patrol { cat: 0, patrol: idx(&d, "12") }), "12:00").await);
-        assert!(tx.contains("1 záznam chybí"), "{tx}");
+        assert!(tx.contains("U 1 stanoviště chybí záznam o nápovědě."), "{tx}");
+    }
+
+    #[tokio::test]
+    async fn info_panel() {
+        let tx = text(&panel(Some(Sel::Info), "12:00").await);
+        assert!(tx.contains("Jak aplikace odhaduje polohu hlídek"), "{tx}");
+        assert!(tx.contains("Polohy hlídek na mapě nejsou úplně skutečné."), "{tx}");
+        assert!(tx.contains("s totálkou právě 40 minut"), "{tx}");
+        assert!(!tx.contains("Mapu berte"), "{tx}");
     }
 
     #[tokio::test]

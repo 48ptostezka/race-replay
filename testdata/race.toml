@@ -1,0 +1,18 @@
+# Test data for `cargo test`. The app reads data/, never this folder, so editing
+# data/ cannot break the tests. Keep these files as they are.
+title = "Šifrovačka 2026"
+speed_kmh = 5
+hint_after_min = 20
+solution_after_min = 40
+merge_radius_m = 15
+
+[[category]]
+id = "M"
+name = "Kategorie M"
+color = "#2f9e44"
+limit = "16:15"
+speed_kmh = 5
+times = "m_casy.csv"
+hints = "m_napovedy.csv"
+route = "trasa_m.gpx"
+sites = "m_stanoviste.csv"
